@@ -418,114 +418,137 @@ The player’s general knowledge about the game. As experience accumulates, the 
 However, the player’s subjective understanding of action value doesn’t necessarily coincide with the true value from the game theory point of view. They may think that it is better to perform action X, while action Y is mathematically optimal.
 If the true value of actions is easy to calculate, the game will quickly get boring: all decisions will become obvious, and a dominant strategy will be discovered. In this case, the game mechanics is reduced to a sport, and not the most interesting one: those who can most quickly perform all the pre-known optimal actions, win (that is, whoever is better at clicking the mouse).
 
-	<img src="FLAME.png" style="width: 100%;"  />
-	<figcaption>Illustration of (Left) response generation using a pre-trained LLM with few-shot prompting and (Right) factuality-aware alignment training pipeline. (Image source: <a href="https://arxiv.org/abs/2405.01525" target="_blank">Lin et al. 2024</a>)</figcaption>
-</figure>
-<p>To avoid accidentally distilling unknown knowledge into the model during alignment training, they suggested using the model generated responses to form SFT / DPO datasets.</p>
-<figure>
-	<img src="FLAME-results.png" style="width: 70%;"  />
-	<figcaption>Performance of SFT and DPO runs, with and without factuality-aware setup, on the task of biography generation. Helpfulness is measured by models' win rate over our baseline SFT + DPO on Alpaca Eval. Note that RLHF makes factuality worse, because human feedback often prefers longer, more detailed answers, which are not necessarily more factual. (Image source: <a href="https://arxiv.org/abs/2405.01525" target="_blank">Lin et al. 2024</a>)</figcaption>
-</figure>
-<p><strong>Factuality tuning</strong> (<a href="https://arxiv.org/abs/2311.08401">Tian &amp; Mitchell et al. 2024</a>) also relies on fine-tuning language models for better factuality. They experimented with different ways of truthfulness estimation of atomic claims in each model sample and then run DPO</p>
-<figure>
-	<img src="factuality-estimation.png" style="width: 100%;"  />
-	<figcaption>Illustration of factuality estimation process. (Image source: <a href="https://arxiv.org/abs/2311.08401" target="_blank">Tian & Mitchell et al. 2024</a>)</figcaption>
-</figure>
-<p>Process of factuality tuning:</p>
-<ol>
-<li>Sample pairs of model completions for a given set of prompts (e.g <code>&quot;Write a bio of Yo-Yo Ma&quot;</code>)</li>
-<li>Annotate them with truthfulness based on two methods without human involved:
-<ul>
-<li>Reference-based: check whether external knowledge base supports the model statement, similar to the above section on <a href="#retrieval-augmented-evaluation">retrieval-based hallucination evaluation</a>.
-<ul>
-<li>(a) Extract a list of atomic claims;</li>
-<li>(b) Find wikipedia reference;</li>
-<li>(c) Use a small NLI fine-tuned model to check whether the reference text supports the atomic claim.</li>
-</ul>
-</li>
-<li>Reference-free: use the model&rsquo;s own confidence as a proxy of its truthfulness, similar to the <a href="#indirect-query">indirect query</a> approach.
-<ul>
-<li>(a) Convert each claim into a corresponding question / need careful rephrase to ensure the question is unambiguous; using few-shot prompting;</li>
-<li>(b) Sample multiple times from the model to answer that question;</li>
-<li>(c) Compute the aggregated score / use string match or ask GPT to judge whether two answers are semantically equivalent.</li>
-</ul>
-</li>
-</ul>
-</li>
-<li>Construct a training dataset by generating multiple samples from the model and assign preference based on truthfulness scores. Then we fine-tune the model with DPO on this dataset.</li>
-</ol>
-<figure>
-	<img src="fact-tuning-results.png" style="width: 100%;"  />
-	<figcaption>Factuality tuning with FActScore (`FactTune-FS`) achieves the best improvement on factuality, compared to factuality tuning with expected confidence score (`FactTune-EC`) and other baselines. (Image source: <a href="https://arxiv.org/abs/2311.08401" target="_blank">Tian & Mitchell et al. 2024</a>)</figcaption>
-</figure>
-<h2 id="fine-tuning-for-attribution">Fine-tuning for Attribution<a hidden class="anchor" aria-hidden="true" href="#fine-tuning-for-attribution">#</a></h2>
-<p>Assigning attribution in the model outputs when generating conditions on search results is a good way to reduce hallucination. There is a branch of work to train LLMs to better consume retrieved content and assign high-quality attributions.</p>
-<p><strong>WebGPT</strong> (<a href="https://arxiv.org/abs/2112.09332">Nakano, et al. 2022</a>) combines web search for document retrieval with a fine-tuned GPT model, aiming to answer long-form questions to reduce hallucination and achieve better factual accuracy. The model interacts with the Internet search in a text-based Web browser and learns to answer with references to web pages. While the model is browsing, one of the actions it can take is to quote an extract from the current page. When this is performed, <em>the page title, domain name and extract</em> are recorded to be used later as a reference. The center of WebGPT is to use references to assist humans to judge factual correctness.</p>
-<p>The model is first supervised fine-tuned on demonstrations of humans using the web-browsing environment to answer questions for behavior cloning. Comparison data is collected between two model-generated answers to the same question (each with their own set of references), where answers are judged for their <em>factual accuracy, coherence, and overall usefulness</em>. Reward model is used for RL training and best-of-n rejection sampling. RL training and best-of-n rejection sampling. In comparison, RL only introduces a small benefit and it is even smaller when rejection sampling is used.</p>
-<figure>
-	<img src="WebGPT-RL.png" style="width: 40%;"  />
-	<figcaption>RL training only introduces slight improvement over BC (behavior cloning) baseline, especially when best-of-n rejection sampling is used. (Image source: <a href="https://arxiv.org/abs/2112.09332" target="_blank">Nakano et al. 2022</a>)</figcaption>
-</figure>
-<p><strong>GopherCite</strong> (<a href="https://arxiv.org/abs/2203.11147">Menick et al. 2022</a>) is quite similar to <strong>WebGPT</strong> on using search engine to create support materials and teaching models to provide references. Both run supervised fine-tuning for bootstrapping and both apply RL training from human preference. But different from WebGPT that depends on human demonstration for behavior cloning, GopherCite generates demonstrations via few-shot prompting and each generation uses context stuffing with relevant documents and then use reward model to score which ones are the best.</p>
-<figure>
-	<img src="GopherCite-demo-gen.png" style="width: 100%;"  />
-	<figcaption>Illustration of demonstration generation procedure with reranking. (Image source: <a href="https://arxiv.org/abs/2203.11147" target="_blank">Menick et al. 2022</a>)</figcaption>
-</figure>
-<p>One additional trick to avoid low quality response is to configure the model to decline to answer with a canned answer <code>&quot;I don't know&quot;</code>, decided by a global RM threshold, known as <em>selective prediction</em>.</p>
-<figure>
-	<img src="GopherCite-results.png" style="width: 100%;"  />
-	<figcaption>Preference vs human-written baselines. Ties are counted as half point on each side. (Image source: <a href="https://arxiv.org/abs/2203.11147" target="_blank">Menick et al. 2022</a>)</figcaption>
-</figure>
-<p>The empirical results on RL is similar to WebGPT in that RL only brings in limited improvement or no improvement when combined with rejection sampling.</p>
-<h1 id="appendix-evaluation-benchmarks">Appendix: Evaluation Benchmarks<a hidden class="anchor" aria-hidden="true" href="#appendix-evaluation-benchmarks">#</a></h1>
-<p>Here is a list of datasets mentioned in this post.</p>
-<p><strong><a href="https://github.com/sylinrl/TruthfulQA">TruthfulQA</a></strong> (<a href="https://arxiv.org/abs/2109.07958">Lin et al. 2021</a>) is designed to measure how well a LLM can generate truthful responses. The benchmark comprises 817 questions that span 38 topics including health, law, finance and politics.</p>
-<p><a href="https://github.com/nayeon7lee/FactualityPrompt"><strong>FactualityPrompt</strong></a> (<a href="https://arxiv.org/abs/2206.04624">Lee, et al. 2022</a>) is a benchmark consisting of both factual and nonfactual prompts. It relies on Wikipedia documents or sentences as the knowledge base for factuality grounding.</p>
-<p><a href="https://github.com/yinzhangyue/SelfAware"><strong>SelfAware</strong></a> (<a href="https://arxiv.org/abs/2305.18153">Yin et al. 2023</a>) contains 1,032 unanswerable questions across five categories and 2,337 answerable questions. Unanswerable questions are sourced from online forums with human annotations while answerable questions are sourced from SQuAD, HotpotQA and TriviaQA based on text similarity with unanswerable questions.</p>
-<p><a href="https://github.com/google-deepmind/long-form-factuality/tree/main/longfact"><strong>LongFact</strong></a> (<a href="https://arxiv.org/abs/2403.18802">Wei et al. 2024</a> ) is designed for checking long-form generation factuality. It consists of 2280 fact-seeking prompts that seek long-form responses on 38 manually curated topics</p>
-<p><a href="https://github.com/microsoft/HaDes"><strong>HaDes</strong></a> (<a href="https://arxiv.org/abs/2104.08704">Liu et al. 2021</a>) is a benchmark for hallucination detection as a binary classification task. The dataset is created by perturbing Wikipedia text and human annotation.</p>
-<p><a href="https://fever.ai/dataset/fever.html"><strong>FEVER</strong></a> (Fact Extraction and VERification) dataset contains 185,445 claims generated by altering sentences extracted from Wikipedia and subsequently verified without knowledge of the sentence they were derived from. Each claim is classified as <code>Supported</code>, <code>Refuted</code> or <code>NotEnoughInfo</code>.</p>
-<p><a href="https://huggingface.co/datasets/fava-uw/fava-data"><strong>FAVABench</strong></a> (<a href="https://arxiv.org/abs/2401.06855">Mishra et al. 2024</a>) is a benchmark for evaluating fine-grained hallucination. There are 200 information-seeking source prompts and 3 model responses per prompt, resulting in 600 responses in total. Each model response is manually labeled with fine-grained annotations on hallucination error types.</p>
-<h1 id="citation">Citation<a hidden class="anchor" aria-hidden="true" href="#citation">#</a></h1>
-<p>Cited as:</p>
-<blockquote>
-<p>Weng, Lilian. (Jul 2024). Extrinsic Hallucinations in LLMs. Lil&rsquo;Log. https://lilianweng.github.io/posts/2024-07-07-hallucination/.</p>
-</blockquote>
-<p>Or</p>
-<pre tabindex="0"><code>@article{weng2024hallucination,
-  title   = &#34;Extrinsic Hallucinations in LLMs.&#34;,
-  author  = &#34;Weng, Lilian&#34;,
-  journal = &#34;lilianweng.github.io&#34;,
-  year    = &#34;2024&#34;,
-  month   = &#34;Jul&#34;,
-  url     = &#34;https://lilianweng.github.io/posts/2024-07-07-hallucination/&#34;
-}
-</code></pre><h1 id="references">References<a hidden class="anchor" aria-hidden="true" href="#references">#</a></h1>
-<p>[1] Ji et al. <a href="https://arxiv.org/abs/2202.03629">&ldquo;Survey of hallucination in natural language generation.&rdquo;</a> ACM Computing Surveys (2022)</p>
-<p>[2] Gekhman et al. <a href="https://arxiv.org/abs/2405.05904">&ldquo;Does Fine-Tuning LLMs on New Knowledge Encourage Hallucinations?&rdquo;</a> arXiv preprint arXiv:2405.05904 (2024).</p>
-<p>[3] Min et al. <a href="https://arxiv.org/abs/2305.14251">&ldquo;FActScore: Fine-grained atomic evaluation of factual precision in long form text generation.&rdquo;</a> EMNLP 2023.</p>
-<p>[4] Wei et al. 2024 <a href="https://arxiv.org/abs/2403.18802">&ldquo;Long-form Factuality in LLMs&rdquo;</a> arXiv preprint arXiv:2403.18802 (2024).</p>
-<p>[5] Chern et al. <a href="https://arxiv.org/abs/2307.13528">&ldquo;FacTool: Factuality detection in generative AI - a tool augmented framework for multi-task and multi-domain scenarios.&rdquo;</a> arXiv preprint arXiv:2307.13528 (2023).</p>
-<p>[6] Lin et al. <a href="https://arxiv.org/abs/2109.07958">&ldquo;TruthfulQA: Measuring How Models Mimic Human Falsehoods.&rdquo;</a> ACL 2022.</p>
-<p>[7] Yin et al. <a href="https://arxiv.org/abs/2305.18153">&ldquo;Do Large Language Models Know What They Don&rsquo;t Know?&rdquo;</a> ACL 2023.</p>
-<p>[8] Kadavath et al. <a href="https://arxiv.org/abs/2207.05221">&ldquo;Language Models (Mostly) Know What They Know&rdquo;</a> arXiv preprint arXiv:2207.05221 (2022).</p>
-<p>[9] Agrawal et al. <a href="https://arxiv.org/abs/2305.18248">&ldquo;Do language models know when they&rsquo;re hallucinating references?&rdquo;</a> arXiv preprint arXiv:2305.18248 (2023).</p>
-<p>[10] Lin et al. <a href="https://arxiv.org/abs/2205.14334">&ldquo;Teaching Models to Learn Uncertainty in Words.&rdquo;</a> arXiv preprint arXiv:2205.14334 (2022).</p>
-<p>[11] Gao et al. <a href="https://arxiv.org/abs/2210.08726">&ldquo;RARR: Researching and Revising What Language Models Say, Using Language Models.&rdquo;</a> ACL 2023.</p>
-<p>[12] He et al. <a href="https://arxiv.org/abs/2301.00303">&ldquo;Rethinking with retrieval: Faithful large language model inference.&rdquo;</a> arXiv preprint arXiv:2301.00303 (2022).</p>
-<p>[13] Asai et al. <a href="https://arxiv.org/abs/2310.11511">&ldquo;Self-RAG: Learning to retrieve, generate and critique through self-reflection.&rdquo;</a> ICLR 2024.</p>
-<p>[14] Mishra et al. <a href="https://arxiv.org/abs/2401.06855">&ldquo;Fine-grained Hallucination Detection and Editing for Language Models.&rdquo;</a> arXiv preprint arXiv:2401.06855 (2024).</p>
-<p>[15] Lee, et al. <a href="https://arxiv.org/abs/2206.04624">&ldquo;Factuality Enhanced Language Models for Open-Ended Text Generation.&rdquo;</a> NeuriPS 2022.</p>
-<p>[16] Manakul et al. <a href="https://arxiv.org/abs/2303.08896">&ldquo;SelfCheckGPT: Zero-Resource Black-Box Hallucination Detection for Generative Large Language Models.&rdquo;</a> EMNLP 2023.</p>
-<p>[17] Li et al. <a href="https://arxiv.org/abs/2306.03341">&ldquo;Inference-Time Intervention:  Eliciting Truthful Answers from a Language Model.&rdquo;</a> NeuriPS 2023.</p>
-<p>[18] Chuang et al. <a href="https://arxiv.org/abs/2309.03883">&ldquo;DoLa: Decoding by contrasting layers improves factuality in large language models.&rdquo;</a> ICLR 2024.</p>
-<p>[19] Dhuliawala et al. <a href="https://arxiv.org/abs/2309.11495">&ldquo;Chain-of-Verification Reduces Hallucination in Large Language Models.&rdquo;</a> arXiv preprint arXiv:2309.11495 (2023).</p>
-<p>[20] Sun et al. <a href="https://arxiv.org/abs/2210.01296">&ldquo;Recitation-Augmented Language Models.&rdquo;</a> ICLR 2023.</p>
-<p>[21] Lin et al. <a href="https://arxiv.org/abs/2405.01525">&ldquo;FLAME: Factuality-Aware Alignment for Large Language Models.&rdquo;</a> arXiv preprint arXiv:2405.01525 (2024).</p>
-<p>[22] Tian &amp; Mitchell et al. <a href="https://arxiv.org/abs/2311.08401">&ldquo;Fine-tuning Language Models for Factuality.&rdquo;</a> ICLR 2024. (<a href="https://github.com/kttian/llm_factuality_tuning">code</a>)</p>
-<p>[23] Nakano, Hilton &amp; Balaji, et al. <a href="https://arxiv.org/abs/2112.09332">&ldquo;WebGPT: Browser-assisted question-answering with human feedback.&rdquo;</a> arXiv preprint arXiv:2112.09332 (2021).</p>
-<p>[24] Menick et al. <a href="https://arxiv.org/abs/2203.11147">&ldquo;Teaching language models to support answers with verified quotes.&rdquo;</a> arXiv preprint arXiv:2203.11147 (2022).</p>
+How to effectively (and satisfactorily) complicate player understanding of game actions
+Considering the last section, it’s important to complicate the path to understanding the true value of game actions:
+Add an element of randomness into the game: “Should I fire a shotgun with a low kill chance, or throw a grenade that will hit the enemy indirectly, but with a guaranteed result?”
+Add another player to the game. This is the strongest uncertainty factor that forces us to manage risks differently. However, adding hard-to-predict AI is fine too. I recall a video from Ghost Recon Breakpoint, where enemies took turns coming out from around the corner exactly into the player’s sight. This is difficult to call impressive, when all you have to do is sit and pull the trigger at regular intervals, without even aiming.
+Hide some information from the players: “What cards might they have in their hand?”
+Make calculations of the true value very difficult. Theoretically, it’s possible to calculate the entire game tree in chess, but not for an ordinary person. An alternative way is to add time pressure, when the player can calculate the true value, but has only half a second to do so, while enemy projectiles are flying around.
+Pitfalls to avoid when designing player actions
+Now, let’s talk about the biggest places we can mess up designing player actions:
+Too few actions. Not enough variations for the player, leading to obvious choices.
+Too many actions. With too many options, the player quickly gets tired of evaluating them and uses just a few.
+I don’t know about you, but by the end of Ghost of Tsushima, I had a pretty hard time managing a lot of the combat options: here’s this type of bomb, here’s another, and a couple more bows, a few super moves as well, and so on. I ended up never using most of this arsenal. Clearly, this ensures freedom with regards to gameplay style choice. But is it worth giving access to all features at the same time and increasing the cognitive load on the player? This question is highly debatable.
+The value of an action is the same throughout the game space. This usually leads to the development of optimal strategies, which players use every time, everywhere.
+The value of an action is too localized to a small area of the game state space. In other words, the action is helpful only in one particular situation. It’s even worse if players almost never get into a situation where it can be used. Isn’t it redundant?
+An exaggerated example: we make a WHOOSH spell for a 2D-souls-like which does little damage, but over a large area. But in 98% of levels, the player only fights one enemy at a time. The effect of “buy a WHOOSH spell “ is very weak.
+An action value dominates over another across the entire space of game states. This makes the second action meaningless. Again, this situation leads to the formation of optimal strategies.
+For instance, in the same 2D-souls-like, we introduce a WHEW spell — it works just like a WHOOSH, but deals 200 more damage, and costs the same amount of mana and gold to buy. WHEW unequivocally dominates WHOOSH, so players will always buy it.
+In the real world, of course, everything is more complicated, but such examples clearly show game design areas where attention for balance must be given. Not for the sake of beautiful numbers on a game designer’s table, but in order to prevent the formation of obvious optimal strategies, and to keep players excited.
+The true value of each action is too easily calculated over the entire space of game states. We have already discussed this one just above.
+Poor information delivery. All available options aren’t shown to players. For example, they don’t know what will happen if action X is performed. All this worsens our game loop.
+As an example, let’s take the system of events from the global strategy Hearts of Iron IV: the players are required to make choices, but sometimes the consequences are completely unclear. What is the difference between “Ask Germany for help” and “Ask Italy for help”? The game doesn’t really explain. As a result, players dive into the event scripts and figure out for themselves what will happen in each case and with what probability. Only after this do their choices turn from random to conscious.
 
+Decision (strategy choice)
+So, the player knows the goal, has an understanding of the current game situation, and a lot of “lever actions”: they need to decide which levers to pull and in what order. That is, they need to choose a strategy. This is the most important part of the game cycle, and getting it right is crucial. Our task is to make all the player’s decisions interesting. Having designed a high-quality set of actions during the previous step, we’ve already practically completed this task.
+What’s going on in player heads at this stage? In a nutshell, they’re comparing the values of action A and action B, and making a choice in favor of the one that seems more effective. What options might exist here?
+Let’s start with some bad ones:
+The subjective value of both actions is near-zero. This is a bad option. Basically, this means that the player’s decision won’t affect goal achievement at all: for example, in a race, the player needs to turn the corner, and instead we offer them to change car color.
+The subjective value of action A is obviously higher than that of action B. This is another bad option. We’ve failed to convey to players all the benefits of action B. This can also happen when the game is poorly balanaced. In this instance, action A is an obvious imbalance, which begs to be corrected. Unless, of course, your goal is to have an obvious imbalance in the game. This can be useful, especially for F2P projects.
+The subjective value of both actions is more or less equal. Yet another bad option. Here, the player doesn’t care which action to take: they’re both equally effective. The decision turns into a random choice that practically has no effect. Boring. Ever put together a cool build in Hades, and then offered a choice between three gifts of the gods which all suck equally well. “Oh, same difference, I’ll pick this one”.
+Now here are some good ones:
+The subjective value of action A is higher than that of action B, but in another equally probable situation, action B will be more valuable. This is a good option. The most important thing here is situation assessment skills. If players manage to recognize the most important thing in the game, they’ll be able to choose a more effective action. Automatism is no longer a part of the decision-making process, but there is still a risk of falling into the abyss of optimal strategies over time.
+Having gained experience, the player will begin to quickly think, “yeah, this situation is similar to the others, so I need to do this.” Continuing the analogy with Hades (and indeed with any draft systems): Gift 1 will fit well with Build 1; Gift 2 will fit well with Build 2.
+My decision will depend on which build I’m closer to now. In the first hours of becoming familiar with the game, exploring new options is interesting, but over time the choices become more and more automatic. The player develops an understanding of effective and ineffective combinations.
+
+The subjective value of action A is not obviously higher than that of action B. Another good option. The main thing here is action value assessment skills. At first glance, the effectiveness of both options for the player may not be obvious. However, with effort, the player will be able to determine which is more effective. Which move to make in chess? What card to add to the deck in Slay the Spire? And is it worth adding at all? Build a city in Terraforming Mars, or better to play a card from your hand with this money? What technology to learn next in Sid Meier’s Civilization VI?
+Cognitive load and subjective significance
+On top of that, each player’s decision has a cognitive load and subjective significance.
+Cognitive load is how much player effort is required to make a decision. It consists of the amount of necessary information, obtainability of this information, and the complexity of its analysis. It’s fairly easy to decide at what point Mario should jump, however, who to ally with in Europa Universalis requires a bit more thought.
+Subjective significance is the importance of this particular decision for the player when achieving the goal. A character’s hairstyle might not matter much if the player’s goal is to kill the boss. But the choice of weapons can be quite an important decision if it helps the player win.
+These two properties balance each other: if a player needs 20 seconds to ponder a choice that ends up with +1% damage, that game loop is unlikely to be enjoyable.
+From here, we can develop a rule: the higher the cognitive load of a decision, the higher its significance must be in order to justify player efforts:
+Interesting decision = ↑ cognitive load + ↑ subjective significance
+But this alone may not be enough either, because the bandwidth of our brain is limited. Ideally, we should also monitor how often players have to make decisions. The more often we let players deal with difficult choices, the quicker they’ll become tired and disinterested. Therefore, it’s worth giving them a break in the form of simpler decisions.
+In this regard, I recall an example of XCOM: Chimera Squad. In this game, the strategic layer is quite lightweight, you can quickly skip it between battles. And during battles, you go straight into action: you have to face difficult decisions during almost every move, there are very few moments to take a breath. This is the result of two design changes.
+First, the system of breaking into rooms: because of this, there are no moves without active opponents, players move from skirmish to skirmish without pauses.
+Second, the back-and-forth turn order: one fighter’s turn is followed by the opponent’s turn. This keeps players in constant stress and a sense of danger.
+This presented a noticeable contrast with XCOM 2: I got tired of playing Chimera pretty quickly, and this isn’t what we want from our players. (But if your audience is ready for such an endless flow of difficult gaming choices, then you go for it, sure thing!)
+Finally, some cognitive load and subjective significance pitfalls to avoid:
+A bad set of actions that generates obvious and meaningless decisions for the player more often than meaningful and interesting ones.
+An obvious discrepancy between the cognitive load of decisions and their subjective significance. Have you ever sat for 5 minutes in Football Manager, thinking over the pressing strategy for Levante against Barcelona, realizing that this will increase the chances of winning by a miserable 1%. Never? …Oh, nevermind!
+Overburdening the player with high cognitive load decisions.
+Hiding all interesting decisions behind a steep learning curve, where the player first needs to absorb a lot of information and gain vast experience in order to start distinguishing obvious solutions from non-obvious ones. The more obstacles the player has to overcome to start enjoying the game loop, the worse for us. Try not to overcomplicate things.
+How players implement actions in practice
+After a player has chosen an action, there’s not much left to do other than actually perform it: that’s the moment when the player presses a button, moves the joystick, or performs a complex combo. A slightly different type of interest lies in this part of the game loop. If decision-making tickles our neocortex, then decision implementation satisfies our “reptilian brain”.
+In fact, this stage is about a low-level core gameplay. It sets the genre and aesthetic-specific character and is determined by the physical requirements of the task. These requirements can vary greatly, from simply clicking a button to pressing a three-button combo every 0.1 seconds.
+But, it’s important not to go too crazy with skill requirements. It’s better to follow this rule: the more difficult it is for a player to make an informed decision, the easier it should be to implement it. Here, again the example of XCOM comes to mind: imagine that in order to perform any action, instead of a simple mouse click, you should perform a series of QTEs, pressing 10 different buttons. Something here definitely sounds off, right? And vice versa: if an action requires some serious physical skills to perform it, then you should not load the player with complex analytical work — they already have their hands full.
+The decision-making phase is affected by the player’s subjective skills. That is, their own assessment of their skills at the time of choosing the strategy. If I’m 99% sure I’m going to botch up a cool combo in Mortal Kombat, then it makes sense for me to perform some easier punch, no matter how effective that combo might seem.
+
+High requirements increase both skill cap and skill gap. This aspect sounds a bit sport-like, and for e-sports players, a high degree of complexity is a desirable thing, opening the way to a more straightforward ranking by skills. Because of this, they often look down on the simplified core gameplay, and an example of such simplification can be reducing the timing requirements in fighting games. Here, we can only say that our task is to clearly understand the audience of our games, and to correctly select the complexity level for their needs. Rule of thumb: the lower the execution requirements, the wider the audience. Subject to equal requirements for decision-making, of course.
+What can go wrong at this stage?
+Discrepancy between the complexities of decision-making and implementation. High skill requirements for both processes will likely lead to a not-so-pleasant game loop.
+Throwing in one more exaggerated example into the piggy bank: how would you like a version of Magic: The Gathering, where players must also stand 2 meters from the table to throw a card from their hand onto the table?
+A mismatch between the implementation complexity and audience needs. Let’s say you want to target players over 40, but set wild requirements for reaction speed in core gameplay? It’s not going to work out.
+Giving players feedback
+So, the player has performed an action and is waiting to see a result. At this stage of the cycle, the game provides them with feedback: this visualizes the result of the player’s action and the transition of the game state to another point in the space of game states.
+Here, the game has three key messages important for players:
+“Okay, I heard you”. This is the basic response to a player’s action — the visual response to a pressed button, sound, character animation, VFX, and so on. This is important because it proves the action has been taken into account.
+“Look, here’s what happened after your action.” Here you need to clearly show what important changes in the game state have occurred as a result of the action. For instance, the enemy’s health has decreased, the player’s position has changed or the boss received a status effect. This will help the player in the game state evaluation phase when making further decisions.
+“Look, something has happened without your participation.” The game state can change without the player’s direct influence. (And most of the time that’s what happens.) It’s necessary to constantly convey which important aspects of the game situation have changed within the simulation framework or due to other player actions. A new enemy has appeared on the radar, a portal has been activated somewhere, night has fallen — all this can greatly change player strategies.
+How can these messages be delivered? So far, we have three channels at our disposal:
+Visual — the most important for games: pictures, animations, special effects, text and other beautiful looking stuff.
+Auditory — sound effects and music. On average, sound is less important, however, in some projects, it can compete with visuals in importance (Hunt: Showdown, Audiosurf).
+Tactile — gamepad or phone vibration. Take the PS5 gamepad for example, where tactile feedback is taken to a new level.
+Now, we’re just waiting for smells and taste to join the fold — the ultimate joy.
+Moving on, the primary requirement for these feedback channels is legibility. We should understand that we’re conveying some important information to the player. The more information we want to convey, the noisier the perception channels become.
+Each feedback element, whether it be an icon, sound, or VFX, has its own visual significance. The larger, longer, louder, or more detailed it is, the more attention it gets. Therefore, all game events followed by feedback must be ranked by importance. The most important things get more visual weight, and unimportant items should be taken out from the feedback stream altogether.
+Do we really need floating damage points in an autobattler? Will this feedback element affect player decision making? Or maybe it would be better to give emotional support? And what should we highlight: the damage points or the heroes’ ability activation? And to what extent? These are all interesting questions, and the answers will depend on the specific game.
+Here are some clear ways one can mess up with the feedback:
+Provide too little feedback on important events and game state changes. Or none at all. Often this problem occurs in quest systems: the player isn’t informed about task progress.
+For example, our quest is to accumulate 6 potatoes in the mobile survival Prey Day. Unless you specifically display this quest tracking on the main screen, it can easily be forgotten. And when the required number of potatoes is accumulated, you won’t be notified and players won’t go get their reward.
+Provide too much feedback that overloads the player’s channels of perception. As a result, really necessary information may get lost in the visual noise. Games produced in Asia are especially fond of this, along with their audience.
+
+Forget to use some channel of perception. It’s not even funny how many times during the development process it goes like “oh my, everyone, we forgot about sounds!”
+Let me give you an example of tactile feedback. If, for example, you play Horizon: Forbidden West on PS5 and then play Days Gone, you might get the feeling that something is wrong. This is you missing a variety of gamepad reactions to game events. It’s the same in mobile gaming: if you turn off haptic feedback in Brawl Stars, you immediately understand how much device vibration contributes into the feeling of hitting enemies.
+Not prioritizing game events. If everything has the same visual importance, legibility suffers.
+Players of mobile battlers are familiar with a large number of status effects that levitate above characters’ heads as small icons. Usually the effects vary in importance: it is more important for me to know which character is concussed, rather than who has a 10% damage buff. Therefore, it makes sense to add more vivid visualization to the effects from the first category, by means of VFX or even character animation. And if one doesn’t have a sense of measure, then the wall of monotonous icons will make the game situation absolutely unreadable.
+
+Let’s digress a little and talk about the narrative aspect
+You might have gotten the idea that this article is only about game mechanics such as game states, the value of actions, the complexity of implementation…
+Well, in fact, the narrative aspect of a game can also be considered through the prism of this model. Moreover, it cannot be excluded from the overall analysis of the game cycle, because the narrative aspect can have a significant impact on the player’s purely game-mechanical decisions. For instance, the player might think, “I will not make a risky move with this character, because I have become too attached to them and I’m afraid of losing them, even if from the mathematical point of view, it would be a result of taking the most optimal decision.”
+How can narrative aspects be taken into account in the game loop?
+We can add narrative elements to the description of the current game state: the current place in the plot, the player’s emotional state, narrative hooks, and so forth.
+We can point out the game state elements at the stage of the player’s decision-making. Narrative aspects can influence the perceived value of the player’s actions and they can even turn a seemingly boring solution from a game mechanic point of view into an interesting one.
+In addition, we can provide the player with actions that have purely narrative consequences. Most conversation systems work this way.
+By the way, who did you sacrifice during the mission on Virmire in the first Mass Effect?
+What is a good game loop then, exactly?
+We’ve tried to build a theoretical model of the game loop. Something even seems to have come about that. So, what practical benefits can be derived from this?
+To begin with, it’s worth returning to one of the questions that we asked at the beginning: “What is a good game?”
+Let’s summarize the contents of the article:
+The basis of interesting gameplay is making interesting decisions.
+The game state space should be large enough to support decision making.
+The value of player actions and strategies should vary significantly depending on different areas of the game state space. Different game situations should use different optimal strategies.
+The action space should be as small as possible to come up with interesting solutions:
+The more demanding the game loop is in terms of the speed of game state evaluation and decision making, the less action space is needed.
+Conversely, the slower and more strategic the game loop is, the bigger action space is needed.
+The value of each action should not be tied to one specific situation only, i.e., take up a very limited space in game states.
+The value of each action shouldn’t be the same over most of the game state space.
+A narrative and emotional component should be included in the analysis of each action value.
+The value of actions and strategies should not be too obvious for every game situation.
+The more obvious and boring the decision is, the higher the requirements to its execution should be.
+Random, useless and obvious solutions should be either taken out or made interesting.
+There shouldn’t be any large areas in the game state space which the player is unlikely to get into. If this is the case, the player will spend most of the time in a limited subset of the state space. And some actions will become too specific and unnecessary.
+The density of interesting decisions per unit of time shouldn’t be too low or too high. It depends on the specifics of the genre and audience:
+The first extreme is long downtime between portions of interest.
+The second extreme is high cognitive load and player fatigue.
+As time passes and the player’s skills improve, the space of states, actions and strategies should expand. This exposes the player to new situations that require new approaches, keeping the decision-making process fresh and interesting.
+It’s necessary to provide the most legible, unambiguous, and beautiful visual displays of the game situation and to provide feedback on player actions.
+I don’t certainly do not claim this set of pillars to represent some complete, ultimate truth. But it helps me sleep at night.
+Bottom line
+The theoretical model described here is just one of the many tools at the game designer’s disposal. It’s interesting to look at a game or part of it from a slightly different angle and more systematically explore problem areas.
+Like any model, this one has its limitations: it’s about mechanics and the interest level of core gameplay. It’s less suitable for the purposes of meta narrative or economic considerations. You’d be well-advised to choose a heavier tool to solve monetization design tasks.
+And the moral of this story is simple: know the scope of your models and don’t show up to a gunfight armed with a knife.
+P.S.
+As a bonus for beginning game designers, I can recommend a simple exercise to analyze game cycles:
+Take the last game you played.
+Focus on a small piece of gameplay asking one question: “What decision am I making right now?”
+Work through an entire set of actions aimed at strategy selection.
+Develop a set of important aspects of the game situation that affect the value of considered actions.
+Reflect on the following questions: Is this solution interesting at all? Or is it all too obvious/meaningless? And how to make it more interesting?
+How is this game loop tied to its neighboring ones? What larger cycle does it belong to? What smaller cycles can it be broken into?
+Repeat this a thousand times!
+Rumor has it that if you practice this exercise long enough, then you’ll get a visitor — from your favorite gaming company, of course!
 
   </div>
 
